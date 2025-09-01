@@ -15,14 +15,28 @@ document.addEventListener("DOMContentLoaded", () => {
         appendMessage(message, "user-message");
         userInput.value = "";
         
-        fetch("http://127.0.0.1:5000/chat", {  // Update URL if using Node.js backend
+        fetch("https://website-chatbot-sy3i.onrender.com/chat", {  // Render backend
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ message: message })
         })
-        .then(response => response.json())
-        .then(data => appendMessage(data.response, "bot-message"))
-        .catch(error => console.error("Error:", error));
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.error) {
+                appendMessage(`Error: ${data.error}`, "bot-message error");
+            } else {
+                appendMessage(data.response, "bot-message");
+            }
+        })
+        .catch(error => {
+            console.error("Error:", error);
+            appendMessage(`Connection error: ${error.message}`, "bot-message error");
+        });
     }
 
     function appendMessage(text, className) {
