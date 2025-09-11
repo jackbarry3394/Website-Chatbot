@@ -16,25 +16,35 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 def home():
     return jsonify({"message": "Chatbot API is running! Use /chat endpoint to send messages."})
 
+conversation_history = []
+
 @app.route("/chat", methods=["POST"])
 def chat():
-    data = request.json or {}
-    user_message = data.get("message", "").strip()
+    data = request.json
+    user_message = data.get("message", "")
 
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
 
+    conversation_history.append({"role": "user", "content": user_message})
+
+    if len(conversation_history) > 5:  # Limit memory to last 5 messages
+        conversation_history.pop(0)
+
     try:
-        completion = client.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
-            messages=[{"role": "system", "content": "You are a helpful AI chatbot that provides clear and concise answers."},
-                      {"role": "user", "content": user_message}]
+            messages=[{"role": "system", "content": "You are a helpful AI chatbot."}] + conversation_history
         )
-        return jsonify({"response": completion.choices[0].message.content})
+        bot_message = response["choices"][0]["message"]["content"]
+        conversation_history.append({"role": "assistant", "content": bot_message})
+
+        return jsonify({"response": bot_message})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
