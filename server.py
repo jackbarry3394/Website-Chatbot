@@ -27,7 +27,8 @@ def chat():
     try:
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": user_message}]
+            messages=[{"role": "system", "content": "You are a helpful AI chatbot that provides clear and concise answers."},
+                      {"role": "user", "content": user_message}]
         )
         return jsonify({"response": completion.choices[0].message.content})
     except Exception as e:
@@ -36,3 +37,4 @@ def chat():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
