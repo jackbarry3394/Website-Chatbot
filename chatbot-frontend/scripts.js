@@ -12,11 +12,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const message = userInput.value.trim();
         if (!message) return;
 
-        appendMessage(message, "user-message");
+        appendMessage(message, "user-message"); // Line 16
         userInput.value = "";
         
         // Show typing indicator
-        appendMessage("Typing...", "bot-message typing");
+        appendMessage("Typing...", ["bot-message", "typing"]); // Line 19, updated
         // Send message to backend
         fetch("https://website-chatbot-sy3i.onrender.com/chat", {
             method: "POST",
@@ -35,9 +35,9 @@ document.addEventListener("DOMContentLoaded", () => {
             document.querySelectorAll(".typing").forEach(el => el.remove());
             
             if (data.error) {
-                appendMessage(`Error: ${data.error}`, "bot-message error");
+                appendMessage(`Error: ${data.error}`, ["bot-message", "error"]); // Line 33, updated
             } else {
-                appendMessage(data.response, "bot-message");
+                appendMessage(data.response, "bot-message"); // Line 31, no change
             }
         })
         .catch(error => {
@@ -45,15 +45,19 @@ document.addEventListener("DOMContentLoaded", () => {
             document.querySelectorAll(".typing").forEach(el => el.remove());
             
             console.error("Error:", error);
-            appendMessage(`Connection error: ${error.message}`, "bot-message error");
+            appendMessage(`Connection error: ${error.message}`, ["bot-message", "error"]); // Updated
         });
     }
 
     function appendMessage(text, className) {
         const messageDiv = document.createElement("div");
-        messageDiv.classList.add(className);
+        if (Array.isArray(className)) {
+            messageDiv.classList.add(...className); // Spread array of classes
+        } else {
+            messageDiv.classList.add(className); // Single class
+        }
         messageDiv.textContent = text;
         chatBox.appendChild(messageDiv);
-        chatBox.scrollTop = chatBox.scrollHeight;  // Auto-scroll to latest message
+        chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to latest message
     }
 });
