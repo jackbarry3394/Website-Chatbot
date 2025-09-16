@@ -15,18 +15,25 @@ document.addEventListener("DOMContentLoaded", () => {
         appendMessage(message, "user-message");
         userInput.value = "";
         
-        fetch("https://website-chatbot-sy3i.onrender.com/chat", {  // Render backend
+        // Show typing indicator
+        appendMessage("Typing...", "bot-message typing");
+        // Send message to backend
+        fetch("https://website-chatbot-sy3i.onrender.com/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ message: message })
         })
         .then(response => {
+            console.log("Response status:", response.status);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             return response.json();
         })
         .then(data => {
+            // Remove typing indicator
+            document.querySelectorAll(".typing").forEach(el => el.remove());
+            
             if (data.error) {
                 appendMessage(`Error: ${data.error}`, "bot-message error");
             } else {
@@ -34,6 +41,9 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         })
         .catch(error => {
+            // Remove typing indicator
+            document.querySelectorAll(".typing").forEach(el => el.remove());
+            
             console.error("Error:", error);
             appendMessage(`Connection error: ${error.message}`, "bot-message error");
         });
