@@ -7,7 +7,7 @@ from openai import OpenAI
 load_dotenv()  # Load API key from .env file
 
 app = Flask(__name__)
-CORS(app, origins=["https://68b5a4b4b03f1ce64346a451--webchatbt.netlify.app", "https://webchatbt.netlify.app"])  # Enable CORS for Netlify domains
+CORS(app, origins=["https://68c95a811a816c575bf12f48--webchatbt.netlify.app/", "https://webchatbt.netlify.app"])  # Enable CORS for Netlify domains
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -52,3 +52,4 @@ def chat():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
