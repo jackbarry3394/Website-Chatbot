@@ -10,8 +10,8 @@ app = Flask(__name__)
 # Updated CORS to include the new Netlify subdomain and wildcard for previews
 CORS(app, origins=[
     "https://68c96f6ee112d8a557177d0c--webchatbt.netlify.app",  # Your current frontend origin
-    "https://webchatbt.netlify.app",  # Main domain
-    "https://*.--webchatbt.netlify.app"  # Wildcard for Netlify preview subdomains (e.g., random-id--webchatbt.netlify.app)
+    "https://webchatbt.netlify.app"  # Main domain
+    #"https://*.--webchatbt.netlify.app"  # Wildcard for Netlify preview subdomains (e.g., random-id--webchatbt.netlify.app)
 ])
 
 # Initialize OpenAI client
@@ -57,3 +57,4 @@ def chat():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
