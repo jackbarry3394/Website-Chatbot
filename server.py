@@ -30,7 +30,7 @@ def register_routes(app):  # Function to register routes with the app
         if not city:
             return jsonify({"error": "City is required"}), 400
 
-        url = f"http://datapoint.metoffice.gov.uk/public/data/val/wxfcs/all/json/sitelist?key={api_key}"
+        url = f"http://datapoint.metoffice.gov.uk/public/data/val/wxfcs/all/xml/3840?res=3hourly?key={api_key}"
 
         try:
             response = requests.get(url)
@@ -99,5 +99,6 @@ def chat():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
