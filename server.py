@@ -1,70 +1,123 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os
-from dotenv import load_dotenv
 from openai import OpenAI
+import os
 import requests
+import xml.etree.ElementTree as ET
+from dotenv import load_dotenv
+from datetime import datetime, timezone
 
-load_dotenv()  # Load API key from .env file
+load_dotenv()
 
 app = Flask(__name__)
-# Updated CORS to include the new Netlify subdomain and wildcard for previews
 CORS(app, origins=[
-    "https://68c96f6ee112d8a557177d0c--webchatbt.netlify.app",  # Your current frontend origin
-    "https://webchatbt.netlify.app"  # Main domain
-    #"https://*.--webchatbt.netlify.app"  # Wildcard for Netlify preview subdomains (e.g., random-id--webchatbt.netlify.app)
+    "https://68c96f6ee112d8a557177d0c--webchatbt.netlify.app",
+    "https://webchatbt.netlify.app"
 ])
 
-# Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Global conversation history (in production, use a database)
+WEATHER_CODE_MAP = {
+    "0": "clear night",
+    "1": "sunny",
+    "2": "partly cloudy night",
+    "3": "partly cloudy",
+    "5": "mist",
+    "6": "fog",
+    "7": "cloudy",
+    "8": "overcast",
+    "9": "light rain shower night",
+    "10": "light rain shower",
+    "11": "drizzle",
+    "12": "light rain",
+    "13": "heavy rain shower",
+    "14": "heavy rain",
+    "15": "torrential rain",
+    "16": "sleet shower night",
+    "17": "sleet shower",
+    "18": "sleet",
+    "19": "hail shower night",
+    "20": "hail shower",
+    "21": "hail",
+    "22": "light snow shower night",
+    "23": "light snow shower",
+    "24": "light snow",
+    "25": "heavy snow shower",
+    "26": "heavy snow",
+    "27": "thunder shower night",
+    "28": "thunder shower",
+    "29": "thunder"
+}
+
 conversation_history = []
 
-def register_routes(app):  # Function to register routes with the app
-    @app.route("/weather", methods=["POST"])
-    def get_weather():
-        city = request.json.get("city", "")
-        api_key = "eyJ4NXQjUzI1NiI6Ik5XVTVZakUxTkRjeVl6a3hZbUl4TkdSaFpqSmpOV1l6T1dGaE9XWXpNMk0yTWpRek5USm1OVEE0TXpOaU9EaG1NVFJqWVdNellXUm1ZalUyTTJJeVpBPT0iLCJraWQiOiJnYXRld2F5X2NlcnRpZmljYXRlX2FsaWFzIiwidHlwIjoiSldUIiwiYWxnIjoiUlMyNTYifQ==.eyJzdWIiOiJqYWNrYmFycnkzMzk0QGdtYWlsLmNvbUBjYXJib24uc3VwZXIiLCJhcHBsaWNhdGlvbiI6eyJvd25lciI6ImphY2tiYXJyeTMzOTRAZ21haWwuY29tIiwidGllclF1b3RhVHlwZSI6bnVsbCwidGllciI6IlVubGltaXRlZCIsIm5hbWUiOiJzaXRlX3NwZWNpZmljLWMyNTJjMWQxLWQ1YzYtNDY1YS05NDY2LTQ2ZGJlYWVlMTZkMSIsImlkIjoyNTU5NywidXVpZCI6IjY2YjEzOWQ3LWQ2ZjItNDAxNS1hZmVlLWZjMWMzYzk4OWI5YyJ9LCJpc3MiOiJodHRwczpcL1wvYXBpLW1hbmFnZXIuYXBpLW1hbmFnZW1lbnQubWV0b2ZmaWNlLmNsb3VkOjQ0M1wvb2F1dGgyXC90b2tlbiIsInRpZXJJbmZvIjp7IndkaF9zaXRlX3NwZWNpZmljX2ZyZWUiOnsidGllclF1b3RhVHlwZSI6InJlcXVlc3RDb3VudCIsImdyYXBoUUxNYXhDb21wbGV4aXR5IjowLCJncmFwaFFMTWF4RGVwdGgiOjAsInN0b3BPblF1b3RhUmVhY2giOnRydWUsInNwaWtlQXJyZXN0TGltaXQiOjAsInNwaWtlQXJyZXN0VW5pdCI6InNlYyJ9fSwia2V5dHlwZSI6IlBST0RVQ1RJT04iLCJzdWJzY3JpYmVkQVBJcyI6W3sic3Vic2NyaWJlclRlbmFudERvbWFpbiI6ImNhcmJvbi5zdXBlciIsIm5hbWUiOiJTaXRlU3BlY2lmaWNGb3JlY2FzdCIsImNvbnRleHQiOiJcL3NpdGVzcGVjaWZpY1wvdjAiLCJwdWJsaXNoZXIiOiJKYWd1YXJfQ0kiLCJ2ZXJzaW9uIjoidjAiLCJzdWJzY3JpcHRpb25UaWVyIjoid2RoX3NpdGVfc3BlY2lmaWNfZnJlZSJ9XSwidG9rZW5fdHlwZSI6ImFwaUtleSIsImlhdCI6MTc1ODI1NDQ3OCwianRpIjoiOWE4MTY0NTItZWU3Mi00MWJjLWJjYTEtNTk0MTRmYWZjNTlkIn0=.Y0lH4WVYNYZi4s1pHLcr5lfs_aN88RGt2s03r1uYif0zFU_EJLAQioOLHMnKPRKYmrTjOt2reoTFmV874wuQKvL3uNCISYWgRQckCXV0oLmXw4n0GS8PSA7fM-fMHP_Ir8EMJsp4HMPQCFzNuyP9HOpw0frn5RVvxJwynW-c0opJx1aIRCv0Tivrbjrd6yq4Jtyba6RNVYZfG2CF5pH3R4ZKWv9jxMi9dNvvrofZwwU1tiUy4eS3vznpEQG1Iq-AwUMaQb9iDLQu1FP4xqeR0my7QgdBmuOHuPQSKgxm0vt_d5VHOI_rVO4moHqazMg6oVZ3ay5i2gCog4qfrLmDBA=="  # Replace with your Met Office API key
+def is_weather_query(message):
+    weather_keywords = ["weather", "umbrella", "rain", "sunny", "snow", "cloudy", "forecast", "temperature"]
+    message_lower = message.lower()
+    if any(keyword in message_lower for keyword in weather_keywords):
+        words = message_lower.split()
+        if "in" in words:
+            city_index = words.index("in") + 1
+            if city_index < len(words):
+                return True, words[city_index].capitalize()
+        if words and words[-1] not in weather_keywords and words[-1] not in ["today", "tomorrow"]:
+            return True, words[-1].capitalize()
+        return True, None
+    return False, None
 
-        if not city:
-            return jsonify({"error": "City is required"}), 400
+def get_weather_data(city):
+    api_key = os.getenv("METOFFICE_API_KEY")
+    if not api_key:
+        return None, "Met Office API key is missing"
 
-        url = f"http://datapoint.metoffice.gov.uk/public/data/val/wxfcs/all/xml/3840?res=3hourly?key={api_key}"
+    url = f"http://datapoint.metoffice.gov.uk/public/data/val/wxfcs/all/xml/3840?res=3hourly&key={api_key}"
 
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            locations = response.json()
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        root = ET.fromstring(response.text)
+        location_id = None
+        for location in root.findall(".//Location"):
+            if location.get("name").lower() == city.lower():
+                location_id = location.get("id")
+                break
 
-            location_id = None
-            for location in locations.get("Locations", {}).get("Location", []):
-                if location["name"].lower() == city.lower():
-                    location_id = location["id"]
-                    break
+        if not location_id:
+            return None, f"City '{city}' not found"
 
-            if not location_id:
-                return jsonify({"error": f"City '{city}' not found"}), 404
+        weather_url = f"http://datapoint.metoffice.gov.uk/public/data/val/wxfcs/all/json/{location_id}?res=3hourly&key={api_key}"
+        response = requests.get(weather_url)
+        response.raise_for_status()
+        data = response.json()
 
-            weather_url = f"http://datapoint.metoffice.gov.uk/public/data/val/wxfcs/all/json/{location_id}?res=3hourly&key={api_key}"
-            response = requests.get(weather_url)
-            response.raise_for_status()
-            data = response.json()
+        today = datetime.now(timezone.utc).date()
+        latest_reps = [
+            rep for period in data["SiteRep"]["DV"]["Location"]["Period"]
+            for rep in period["Rep"]
+            if datetime.fromisoformat(rep["$"].replace("Z", "+00:00")).date() == today
+        ]
+        if not latest_reps:
+            latest_reps = [data["SiteRep"]["DV"]["Location"]["Period"][0]["Rep"][0]]
 
-            latest_period = data["SiteRep"]["DV"]["Location"]["Period"][0]["Rep"][0]
-            weather = latest_period["W"]  # Weather type code
-            temperature = latest_period["T"]  # Temperature in Celsius
+        latest_period = latest_reps[0]
+        weather_code = latest_period["W"]
+        weather_description = WEATHER_CODE_MAP.get(weather_code, "unknown weather")
+        temperature = latest_period["T"]
+        precipitation_prob = latest_period.get("P", "0")
+        timestamp = latest_period["$"]
 
-            return jsonify({"weather": weather, "temperature": temperature})
+        return {
+            "city": city,
+            "weather": weather_description,
+            "temperature": temperature,
+            "precipitation": precipitation_prob,
+            "timestamp": timestamp
+        }, None
 
-        except requests.exceptions.RequestException as e:
-            return jsonify({"error": f"Request failed: {str(e)}"}), 500
-        except (KeyError, IndexError) as e:
-            return jsonify({"error": f"Error parsing response: {str(e)}"}), 500
-
-@app.route("/")
-def home():
-    return jsonify({"message": "Chatbot API is running! Use /chat endpoint to send messages."})
+    except requests.exceptions.RequestException as e:
+        return None, f"Request failed: {str(e)}"
+    except (ET.ParseError, KeyError, IndexError) as e:
+        return None, f"Error parsing response: {str(e)}"
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -75,30 +128,51 @@ def chat():
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
 
-    # Add user message to conversation history
+    is_weather, city = is_weather_query(user_message)
+    weather_info = None
+    weather_error = None
+
+    if is_weather and city:
+        weather_data, error = get_weather_data(city)
+        if error:
+            conversation_history.append({"role": "user", "content": user_message})
+            conversation_history.append({"role": "assistant", "content": error})
+            return jsonify({"response": error})
+        weather_info = weather_data
+
     conversation_history.append({"role": "user", "content": user_message})
-    
-    # Limit memory to 10 messages (5 exchanges)
     if len(conversation_history) > 10:
         conversation_history = conversation_history[-10:]
 
     try:
+        system_prompt = "You are a friendly, concise AI chatbot. For weather queries, provide practical advice (e.g., mention umbrellas for rain, sunscreen for sun) based on the provided weather data, and keep the tone conversational."
+        if weather_info:
+            system_prompt += f" Today's weather in {weather_info['city']} is {weather_info['weather']} with a temperature of {weather_info['temperature']}°C and {weather_info['precipitation']}% chance of precipitation, as of {weather_info['timestamp']}."
+
+        messages = [{"role": "system", "content": system_prompt}] + conversation_history
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a helpful AI chatbot that provides clear and concise answers."}
-            ] + conversation_history
+            messages=messages
         )
         bot_message = completion.choices[0].message.content
         conversation_history.append({"role": "assistant", "content": bot_message})
-
         return jsonify({"response": bot_message})
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/weather", methods=["POST"])
+def get_weather():
+    city = request.json.get("city", "")
+    weather_data, error = get_weather_data(city)
+    if error:
+        return jsonify({"error": error}), 400 if "not found" in error else 500
+    return jsonify({
+        "weather": weather_data["weather"],
+        "temperature": weather_data["temperature"],
+        "precipitation": weather_data["precipitation"],
+        "timestamp": weather_data["timestamp"]
+    })
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
-
-
-
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
