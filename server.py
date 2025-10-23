@@ -5,8 +5,13 @@ import os
 import requests
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+import logging  # Added for debugging
 
 load_dotenv()
+
+# Set up logging for Render
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app, origins=[
@@ -22,7 +27,6 @@ WEATHER_CODE_MAP = {
     "1": "sunny day",
     "2": "partly cloudy night",
     "3": "partly cloudy day",
-    "4": "not used",
     "5": "mist",
     "6": "fog",
     "7": "cloudy",
@@ -47,8 +51,7 @@ WEATHER_CODE_MAP = {
     "26": "heavy snow shower day",
     "27": "thunder shower night",
     "28": "thunder shower day",
-    "29": "thunder",
-    "30": "light snow"
+    "29": "thunder"
 }
 
 conversation_history = []
@@ -72,51 +75,89 @@ def is_weather_query(message):
     return False, None
 
 def get_city_coordinates(city):
-    """Get lat/lon for any city using free Nominatim API."""
-    url = f"https://nominatim.openstreetmap.org/search?q={city},UK&format=json&limit=1&countrycodes=gb"
+    """Get lat/lon for UK city using free Nominatim API (enhanced for reliability)."""
+    # Fallback coordinates for common cities
+    fallback_coords = {
+        "london": (51.5074, -0.1278),
+        "cambridge": (52.2053, 0.1218),
+        "wisbech": (52.6667, 0.1606)
+    }
+    city_lower = city.lower()
+    if city_lower in fallback_coords:
+        logger.info(f"Using fallback coordinates for {city}")
+        return fallback_coords[city_lower]
+
+    # Nominatim query with enhanced parameters
+    query = f"{city} UK"
+    url = f"https://nominatim.openstreetmap.org/search?q={query}&format=json&limit=3&countrycodes=gb&addressdetails=1"
     try:
         response = requests.get(url, headers={"User-Agent": "WeatherBot/1.0"})
         response.raise_for_status()
         data = response.json()
+        logger.info(f"Nominatim response for '{city}': {len(data)} results")
         if data:
-            return float(data[0]["lat"]), float(data[0]["lon"])
+            # Pick the first UK match
+            for result in data:
+                if result.get("country_code") == "gb":
+                    lat = float(result["lat"])
+                    lon = float(result["lon"])
+                    logger.info(f"Found coordinates for {city}: {lat}, {lon}")
+                    return lat, lon
+            # If no GB match, use first result
+            lat = float(data[0]["lat"])
+            lon = float(data[0]["lon"])
+            logger.info(f"Using first result for {city}: {lat}, {lon}")
+            return lat, lon
+        logger.warning(f"No results for {city}")
         return None, None
-    except Exception:
+    except Exception as e:
+        logger.error(f"Nominatim error for {city}: {str(e)}")
         return None, None
 
 def get_weather_data(city):
-    """Get weather from Met Office DataHub API."""
+    """Get weather from Met Office DataHub Global Spot Forecast API."""
     api_key = os.getenv("METOFFICE_HUB_KEY")
     if not api_key:
         return None, "Met Office API key is missing"
 
-    # Get coordinates for UK city
     lat, lon = get_city_coordinates(city)
     if lat is None or lon is None:
         return None, f"Could not find '{city}' in the UK"
 
+    logger.info(f"Getting weather for {city} at lat={lat}, lon={lon}")
+
     headers = {"Ocp-Apim-Subscription-Key": api_key}
-    
+
     try:
-        # Get forecast using lat/lon
         url = f"https://api-metoffice.apiconnect.ibmcloud.com/metoffice/production/v0/forecasts/point?lat={lat}&lon={lon}"
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         data = response.json()
+        logger.info(f"Met Office response status: {response.status_code}")
 
-        # Parse today's forecast (first period)
-        forecast_periods = data.get("forecastPeriods", [])
-        if not forecast_periods:
+        # Parse GeoJSON response
+        feature_collection = data.get("featureCollection", {})
+        features = feature_collection.get("features", [])
+        if not features:
+            logger.warning("No features in response")
             return None, "No forecast data available"
 
-        today_forecast = forecast_periods[0]
-        location_periods = today_forecast.get("location", {})
-        
-        weather_code = str(location_periods.get("weatherType", "0"))
+        first_feature = features[0]
+        properties = first_feature.get("properties", {})
+        time_series = properties.get("timeSeries", [])
+        if not time_series:
+            logger.warning("No time series in response")
+            return None, "No time series data"
+
+        first_time_series = time_series[0]
+        forecast = first_time_series.get("forecast", {})
+        weather_code = str(forecast.get("weatherType", "0"))
         weather_description = WEATHER_CODE_MAP.get(weather_code, "unknown weather")
-        temperature = location_periods.get("temperature", {}).get("value", 0)
-        precipitation_prob = location_periods.get("precipitationProbability", {}).get("value", 0)
-        timestamp = today_forecast.get("forecastPeriod", "")
+        temperature = forecast.get("temperature", {}).get("value", 0)
+        precipitation_prob = forecast.get("precipitationProbability", {}).get("value", 0)
+        timestamp = first_time_series.get("forecastPeriod", "")
+
+        logger.info(f"Weather for {city}: {weather_description}, {temperature}°C, {precipitation_prob}% precip")
 
         return {
             "city": city,
@@ -127,12 +168,14 @@ def get_weather_data(city):
         }, None
 
     except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP error: {e.response.status_code} for {city}")
         if e.response.status_code == 401:
             return None, "Invalid Met Office API key"
         elif e.response.status_code == 404:
-            return None, f"Location '{city}' not found in Met Office data"
+            return None, f"Forecast not available for '{city}'"
         return None, f"API error: {e.response.status_code}"
     except Exception as e:
+        logger.error(f"Unexpected error for {city}: {str(e)}")
         return None, f"Error: {str(e)}"
 
 @app.route("/chat", methods=["POST"])
@@ -160,9 +203,13 @@ def chat():
         conversation_history = conversation_history[-10:]
 
     try:
-        system_prompt = "You are a friendly, concise AI chatbot. For weather queries, provide practical advice (e.g., mention umbrellas for rain, sunscreen for sun) based on the provided weather data, and keep the tone conversational."
+        # FIXED SYSTEM PROMPT
         if weather_info:
-            system_prompt += f" Today's weather in {weather_info['city']} is {weather_info['weather']} with a temperature of {weather_info['temperature']}°C and {weather_info['precipitation']}% chance of precipitation."
+            system_prompt = f"""You are a friendly, concise AI chatbot. 
+            Today's weather in {weather_info['city']} is {weather_info['weather']} with a temperature of {weather_info['temperature']}°C and {weather_info['precipitation']}% chance of precipitation.
+            Provide practical advice: mention umbrellas for rain, sunscreen for sun. Keep responses conversational and short."""
+        else:
+            system_prompt = "You are a friendly, concise AI chatbot. Keep responses conversational and short."
 
         messages = [{"role": "system", "content": system_prompt}] + conversation_history
         completion = client.chat.completions.create(
