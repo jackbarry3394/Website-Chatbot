@@ -16,43 +16,46 @@ CORS(app, origins=[
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Map Met Office DataHub weather codes to plain English
 WEATHER_CODE_MAP = {
     "0": "clear night",
-    "1": "sunny",
+    "1": "sunny day",
     "2": "partly cloudy night",
-    "3": "partly cloudy",
+    "3": "partly cloudy day",
+    "4": "not used",
     "5": "mist",
     "6": "fog",
     "7": "cloudy",
     "8": "overcast",
     "9": "light rain shower night",
-    "10": "light rain shower",
+    "10": "light rain shower day",
     "11": "drizzle",
     "12": "light rain",
-    "13": "heavy rain shower",
-    "14": "heavy rain",
+    "13": "heavy rain shower night",
+    "14": "heavy rain shower day",
     "15": "torrential rain",
     "16": "sleet shower night",
-    "17": "sleet shower",
+    "17": "sleet shower day",
     "18": "sleet",
     "19": "hail shower night",
-    "20": "hail shower",
+    "20": "hail shower day",
     "21": "hail",
     "22": "light snow shower night",
-    "23": "light snow shower",
+    "23": "light snow shower day",
     "24": "light snow",
-    "25": "heavy snow shower",
-    "26": "heavy snow",
+    "25": "heavy snow shower night",
+    "26": "heavy snow shower day",
     "27": "thunder shower night",
-    "28": "thunder shower",
-    "29": "thunder"
+    "28": "thunder shower day",
+    "29": "thunder",
+    "30": "light snow"
 }
 
 conversation_history = []
 
 @app.route("/")
 def home():
-    return jsonify({"message": "Chatbot API is running! Use /chat or /weather."})
+    return jsonify({"message": "Met Office Chatbot API is running! Use /chat or /weather."})
 
 def is_weather_query(message):
     weather_keywords = ["weather", "umbrella", "rain", "sunny", "snow", "cloudy", "forecast", "temperature"]
@@ -68,38 +71,48 @@ def is_weather_query(message):
         return True, None
     return False, None
 
+def get_city_coordinates(city):
+    """Get lat/lon for any city using free Nominatim API."""
+    url = f"https://nominatim.openstreetmap.org/search?q={city},UK&format=json&limit=1&countrycodes=gb"
+    try:
+        response = requests.get(url, headers={"User-Agent": "WeatherBot/1.0"})
+        response.raise_for_status()
+        data = response.json()
+        if data:
+            return float(data[0]["lat"]), float(data[0]["lon"])
+        return None, None
+    except Exception:
+        return None, None
+
 def get_weather_data(city):
+    """Get weather from Met Office DataHub API."""
     api_key = os.getenv("METOFFICE_HUB_KEY")
     if not api_key:
         return None, "Met Office API key is missing"
 
+    # Get coordinates for UK city
+    lat, lon = get_city_coordinates(city)
+    if lat is None or lon is None:
+        return None, f"Could not find '{city}' in the UK"
+
+    headers = {"Ocp-Apim-Subscription-Key": api_key}
+    
     try:
-        # Get locations
-        location_url = f"https://api-metoffice.apiconnect.ibmcloud.com/metoffice/production/v0/sites?key={api_key}"
-        response = requests.get(location_url)
-        response.raise_for_status()
-        locations = response.json()
-        
-        location_id = None
-        for site in locations.get("sites", []):
-            if site.get("name", "").lower() == city.lower():
-                location_id = site.get("id")
-                break
-
-        if not location_id:
-            return None, f"City '{city}' not found"
-
-        # Get forecast
-        forecast_url = f"https://api-metoffice.apiconnect.ibmcloud.com/metoffice/production/v0/forecasts/point/{location_id}?key={api_key}"
-        response = requests.get(forecast_url)
+        # Get forecast using lat/lon
+        url = f"https://api-metoffice.apiconnect.ibmcloud.com/metoffice/production/v0/forecasts/point?lat={lat}&lon={lon}"
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
         data = response.json()
 
-        # Get today's forecast (first location period)
-        today_forecast = data.get("forecastPeriods", [{}])[0]
-        location_periods = today_forecast.get("locationPeriods", [{}])[0]
+        # Parse today's forecast (first period)
+        forecast_periods = data.get("forecastPeriods", [])
+        if not forecast_periods:
+            return None, "No forecast data available"
+
+        today_forecast = forecast_periods[0]
+        location_periods = today_forecast.get("location", {})
         
-        weather_code = location_periods.get("weatherType", "0")
+        weather_code = str(location_periods.get("weatherType", "0"))
         weather_description = WEATHER_CODE_MAP.get(weather_code, "unknown weather")
         temperature = location_periods.get("temperature", {}).get("value", 0)
         precipitation_prob = location_periods.get("precipitationProbability", {}).get("value", 0)
@@ -113,10 +126,14 @@ def get_weather_data(city):
             "timestamp": timestamp
         }, None
 
-    except requests.exceptions.RequestException as e:
-        return None, f"Request failed: {str(e)}"
-    except (KeyError, IndexError) as e:
-        return None, f"Error parsing response: {str(e)}"
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            return None, "Invalid Met Office API key"
+        elif e.response.status_code == 404:
+            return None, f"Location '{city}' not found in Met Office data"
+        return None, f"API error: {e.response.status_code}"
+    except Exception as e:
+        return None, f"Error: {str(e)}"
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -129,7 +146,6 @@ def chat():
 
     is_weather, city = is_weather_query(user_message)
     weather_info = None
-    weather_error = None
 
     if is_weather and city:
         weather_data, error = get_weather_data(city)
@@ -165,7 +181,7 @@ def get_weather():
     city = request.json.get("city", "")
     weather_data, error = get_weather_data(city)
     if error:
-        return jsonify({"error": error}), 400 if "not found" in error else 500
+        return jsonify({"error": error}), 400 if "not found" in error.lower() else 500
     return jsonify({
         "weather": weather_data["weather"],
         "temperature": weather_data["temperature"],
