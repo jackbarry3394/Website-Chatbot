@@ -22,6 +22,7 @@ WEATHER_CODE_MAP = {
     "1": "sunny day",
     "2": "partly cloudy night",
     "3": "partly cloudy day",
+    "4": "not used",
     "5": "mist",
     "6": "fog",
     "7": "cloudy",
@@ -46,7 +47,8 @@ WEATHER_CODE_MAP = {
     "26": "heavy snow shower day",
     "27": "thunder shower night",
     "28": "thunder shower day",
-    "29": "thunder"
+    "29": "thunder",
+    "30": "light snow"
 }
 
 conversation_history = []
@@ -70,7 +72,7 @@ def is_weather_query(message):
     return False, None
 
 def get_city_coordinates(city):
-    """Get lat/lon for UK city using free Nominatim API."""
+    """Get lat/lon for any city using free Nominatim API."""
     url = f"https://nominatim.openstreetmap.org/search?q={city},UK&format=json&limit=1&countrycodes=gb"
     try:
         response = requests.get(url, headers={"User-Agent": "WeatherBot/1.0"})
@@ -83,42 +85,38 @@ def get_city_coordinates(city):
         return None, None
 
 def get_weather_data(city):
-    """Get weather from Met Office DataHub Global Spot Forecast API."""
+    """Get weather from Met Office DataHub API."""
     api_key = os.getenv("METOFFICE_HUB_KEY")
     if not api_key:
         return None, "Met Office API key is missing"
 
+    # Get coordinates for UK city
     lat, lon = get_city_coordinates(city)
     if lat is None or lon is None:
         return None, f"Could not find '{city}' in the UK"
 
     headers = {"Ocp-Apim-Subscription-Key": api_key}
-
+    
     try:
+        # Get forecast using lat/lon
         url = f"https://api-metoffice.apiconnect.ibmcloud.com/metoffice/production/v0/forecasts/point?lat={lat}&lon={lon}"
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         data = response.json()
 
-        # Parse GeoJSON response (featureCollection > features[0] > properties > timeSeries[0] > forecast)
-        feature_collection = data.get("featureCollection", {})
-        features = feature_collection.get("features", [])
-        if not features:
+        # Parse today's forecast (first period)
+        forecast_periods = data.get("forecastPeriods", [])
+        if not forecast_periods:
             return None, "No forecast data available"
 
-        first_feature = features[0]
-        properties = first_feature.get("properties", {})
-        time_series = properties.get("timeSeries", [])
-        if not time_series:
-            return None, "No time series data"
-
-        first_time_series = time_series[0]
-        forecast = first_time_series.get("forecast", {})
-        weather_code = str(forecast.get("weatherType", "0"))
+        today_forecast = forecast_periods[0]
+        location_periods = today_forecast.get("location", {})
+        
+        weather_code = str(location_periods.get("weatherType", "0"))
         weather_description = WEATHER_CODE_MAP.get(weather_code, "unknown weather")
-        temperature = forecast.get("temperature", {}).get("value", 0)
-        precipitation_prob = forecast.get("precipitationProbability", {}).get("value", 0)
-        timestamp = first_time_series.get("forecastPeriod", "")
+        temperature = location_periods.get("temperature", {}).get("value", 0)
+        precipitation_prob = location_periods.get("precipitationProbability", {}).get("value", 0)
+        timestamp = today_forecast.get("forecastPeriod", "")
 
         return {
             "city": city,
@@ -132,7 +130,7 @@ def get_weather_data(city):
         if e.response.status_code == 401:
             return None, "Invalid Met Office API key"
         elif e.response.status_code == 404:
-            return None, f"Forecast not available for '{city}'"
+            return None, f"Location '{city}' not found in Met Office data"
         return None, f"API error: {e.response.status_code}"
     except Exception as e:
         return None, f"Error: {str(e)}"
