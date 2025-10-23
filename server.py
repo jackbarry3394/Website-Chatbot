@@ -3,7 +3,6 @@ from flask_cors import CORS
 from openai import OpenAI
 import os
 import requests
-import xml.etree.ElementTree as ET
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 
@@ -51,6 +50,10 @@ WEATHER_CODE_MAP = {
 
 conversation_history = []
 
+@app.route("/")
+def home():
+    return jsonify({"message": "Chatbot API is running! Use /chat or /weather."})
+
 def is_weather_query(message):
     weather_keywords = ["weather", "umbrella", "rain", "sunny", "snow", "cloudy", "forecast", "temperature"]
     message_lower = message.lower()
@@ -66,45 +69,41 @@ def is_weather_query(message):
     return False, None
 
 def get_weather_data(city):
-    api_key = os.getenv("METOFFICE_API_KEY")
+    api_key = os.getenv("METOFFICE_HUB_KEY")
     if not api_key:
         return None, "Met Office API key is missing"
 
-    url = f"http://datapoint.metoffice.gov.uk/public/data/val/wxfcs/all/xml/3840?res=3hourly&key={api_key}"
-
     try:
-        response = requests.get(url)
+        # Get locations
+        location_url = f"https://api-metoffice.apiconnect.ibmcloud.com/metoffice/production/v0/sites?key={api_key}"
+        response = requests.get(location_url)
         response.raise_for_status()
-        root = ET.fromstring(response.text)
+        locations = response.json()
+        
         location_id = None
-        for location in root.findall(".//Location"):
-            if location.get("name").lower() == city.lower():
-                location_id = location.get("id")
+        for site in locations.get("sites", []):
+            if site.get("name", "").lower() == city.lower():
+                location_id = site.get("id")
                 break
 
         if not location_id:
             return None, f"City '{city}' not found"
 
-        weather_url = f"http://datapoint.metoffice.gov.uk/public/data/val/wxfcs/all/json/{location_id}?res=3hourly&key={api_key}"
-        response = requests.get(weather_url)
+        # Get forecast
+        forecast_url = f"https://api-metoffice.apiconnect.ibmcloud.com/metoffice/production/v0/forecasts/point/{location_id}?key={api_key}"
+        response = requests.get(forecast_url)
         response.raise_for_status()
         data = response.json()
 
-        today = datetime.now(timezone.utc).date()
-        latest_reps = [
-            rep for period in data["SiteRep"]["DV"]["Location"]["Period"]
-            for rep in period["Rep"]
-            if datetime.fromisoformat(rep["$"].replace("Z", "+00:00")).date() == today
-        ]
-        if not latest_reps:
-            latest_reps = [data["SiteRep"]["DV"]["Location"]["Period"][0]["Rep"][0]]
-
-        latest_period = latest_reps[0]
-        weather_code = latest_period["W"]
+        # Get today's forecast (first location period)
+        today_forecast = data.get("forecastPeriods", [{}])[0]
+        location_periods = today_forecast.get("locationPeriods", [{}])[0]
+        
+        weather_code = location_periods.get("weatherType", "0")
         weather_description = WEATHER_CODE_MAP.get(weather_code, "unknown weather")
-        temperature = latest_period["T"]
-        precipitation_prob = latest_period.get("P", "0")
-        timestamp = latest_period["$"]
+        temperature = location_periods.get("temperature", {}).get("value", 0)
+        precipitation_prob = location_periods.get("precipitationProbability", {}).get("value", 0)
+        timestamp = today_forecast.get("forecastPeriod", "")
 
         return {
             "city": city,
@@ -116,7 +115,7 @@ def get_weather_data(city):
 
     except requests.exceptions.RequestException as e:
         return None, f"Request failed: {str(e)}"
-    except (ET.ParseError, KeyError, IndexError) as e:
+    except (KeyError, IndexError) as e:
         return None, f"Error parsing response: {str(e)}"
 
 @app.route("/chat", methods=["POST"])
@@ -147,7 +146,7 @@ def chat():
     try:
         system_prompt = "You are a friendly, concise AI chatbot. For weather queries, provide practical advice (e.g., mention umbrellas for rain, sunscreen for sun) based on the provided weather data, and keep the tone conversational."
         if weather_info:
-            system_prompt += f" Today's weather in {weather_info['city']} is {weather_info['weather']} with a temperature of {weather_info['temperature']}°C and {weather_info['precipitation']}% chance of precipitation, as of {weather_info['timestamp']}."
+            system_prompt += f" Today's weather in {weather_info['city']} is {weather_info['weather']} with a temperature of {weather_info['temperature']}°C and {weather_info['precipitation']}% chance of precipitation."
 
         messages = [{"role": "system", "content": system_prompt}] + conversation_history
         completion = client.chat.completions.create(
